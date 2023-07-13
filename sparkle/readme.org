@@ -1,0 +1,183 @@
+                SPARKLE
+                v0.1.0 ("proof-of-concept")
+
+Introduction
+This software provides fast in-memory transactional map-reduce (TXMR).
+This software is EXPERIMENTAL. DO NOT USE in a production environment.
+
+Two types of engine, sequential (λ) and concurrent (π), are available
+for processing TXMR workloads. For workloads where record sets are
+mostly non-exclusive, the (λ,*) engines are recommended because they
+incur no locking overhead. On the other hand, for workloads where
+record sets are mostly exclusive, the (π,*) engines are recommended
+because they take advantage of concurrency.
+
+Each engine supports broadcast, pipeline, or pipeline-star (pipeline*)
+mode.
+
+    In broadcast mode, the map function is first applied on all the
+    records (i.e. "vectorized", "broadcast", or "bulk"-applied) in a
+    record set, and then once all the records have been mapped, the
+    mapped records are fed to the reducer.
+
+    In pipeline mode, the map and reduce functions are chained
+    together, and each record is individually passed through the
+    chain. When the map function is applied to a single record, it
+    yields a single mapped record that is immediately passed to the
+    reducer. The reducer maintains the state of the incumbent record,
+    and new mapped records that it receives are compared against this
+    incumbent.
+
+    In pipeline* mode, a heuristic map function is attached to the
+    front of the map-reduce chain. This function returns the
+    lower-bound on the mapped cost of a record, and only records where
+    this lower-bound cost is less than the cost of the incumbent are
+    passed through the rest of the chain.
+
+Summary Table
+|--------------------+-------------+------------+---------------|
+| Engine/Use When... | Exclusivity | Core Count | Has Heuristic |
+|--------------------+-------------+------------+---------------|
+| (λ,λ)-broadcast    | None        | Single     | No            |
+| (λ,λ)-pipeline     | None        | Single     | No            |
+| (λ,λ)-pipeline*    | None        | Single     | Yes           |
+| (λ,π)-broadcast    | None        | Low        | No            |
+| (λ,π)-pipeline     | None        | Low        | No            |
+| (λ,π)-pipeline*    | None        | Low        | Yes           |
+|--------------------+-------------+------------+---------------|
+| (π,λ)-broadcast    | High        | Low        | No            |
+| (π,π)-broadcast    | High        | High       | No            |
+| (π,λ)-pipeline     |             |            |               |
+| ---- exclusive     | High        | Low        | No            |
+| ---- maprelease    | Med         | Low        | No            |
+| ---- ticket        | Low         | Low        | No            |
+| (π,λ)-pipeline*    |             |            |               |
+| ---- exclusive     | High        | Low        | Yes           |
+| ---- maprelease    | Med         | Low        | Yes           |
+| ---- ticket        | Low         | Low        | Yes           |
+| (π,π)-pipeline     |             |            |               |
+| ---- exclusive     | High        | High       | No            |
+| ---- maprelease    | Med         | High       | No            |
+| ---- ticket        | Low         | High       | No            |
+| (π,π)-pipeline*    |             |            |               |
+| ---- exclusive     | High        | High       | Yes           |
+| ---- maprelease    | Med         | High       | Yes           |
+| ---- ticket        | Low         | High       | Yes           |
+|--------------------+-------------+------------+---------------|
+
+Function Parameters
+Engines are started by calling broadcast! or by calling pipeline!
+with the below parameters. See src/broadcast.jl and src/pipeline.jl
+for details.
+
+    d, Matrix
+        Stores dataset records. Each record is stored in its own row
+        and must be indexed by the row number, e.g.  Record i is in
+        row i.
+
+    R, Matrix
+        Stores requests. Each request is stored in its own row.
+
+    prune, (d, request) -> Vector{Integer}
+        Returns the indices of the records in `d` that make up the
+        record set for `request`. The returned indices MUST be sorted
+        and unique.
+
+    g, (record, request) -> ctype
+        Returns the mapped cost, with type `ctype`.
+
+    g-prime, (record, request) -> ctype
+        Returns the lower-bound mapped cost, with type `ctype`.
+
+    φ, ((i,c)) -> Boolean
+        Returns `true` if record `i` with cost `c` should be kept in
+        the mapped result set, or `false` otherwise.
+
+    update, (record, request, c) -> Vector
+        Returns a new value of `record`.
+
+Sequential Engines
+For the (λ,*) engines, requests are processed one at a time, in
+sequential order. In general, sequential engines are recommended for
+when record sets are mostly non-exclusive or where request order is
+important.
+
+    (λ,λ)-broadcast
+        Processes requests using single-threaded broadcast mode.
+        Locking schemes:
+            none
+
+    (λ,π)-broadcast
+        Processes requests using single-threaded broadcast mode, but
+        during the map phase, the map function is applied to records
+        in parallel. Locking schemes:
+            none
+
+    (λ,λ)-pipeline, (λ,λ)-pipeline*
+        Processes requests using single-threaded pipeline or pipeline*
+        mode. Locking schemes:
+            none
+
+    (λ,π)-pipeline, (λ,π)-pipeline*
+        Processes requests using single-threaded pipeline or pipeline*
+        mode, but for each request, the records in its record set are
+        fed through the chain in parallel. Locking schemes:
+            simple
+
+Parallel Engines
+For the (π,*) engines, requests are processed concurrently. Due to the
+concurrent processing, requests may be processed out-of-order. In
+general, parallel engines are recommended for when record sets are
+mostly exclusive and where request order is not important.
+
+    (π,λ)-broadcast
+        Processes requests using multi-threaded broadcast mode, but
+        for each request, the records in its record set are processed
+        in a single thread. Locking schemes:
+            exclusive
+
+    (π,π)-broadcast
+        Processes requests using multi-threaded broadcast mode, and
+        for each request, the records in its record set are processed
+        in parallel. Locking schemes:
+            exclusive
+
+    (π,λ)-pipeline, (π,λ)-pipeline*
+        Processes requests using multi-threaded pipeline or pipeline*
+        mode, but for each request, the records in its record set
+        are fed through the chain one at a time. Locking schemes:
+            exclusive
+            maprelease
+            ticket
+
+    (π,π)-pipeline, (π,π)-pipeline*
+        Processes requests using multi-threaded pipeline or pipeline*
+        mode, and for each request, the records in its record set
+        are fed through the chain in parallel. Locking schemes:
+            exclusive
+            maprelease
+            ticket
+
+Locking Schemes
+Each engine depends on a locking scheme in order to prevent dirty
+reads and lost writes and to guarantee serializability of the
+transactions.
+
+    simple
+        A single lock is acquired to update the reduction incumbent,
+        and then released following the update.
+
+    exclusive
+        A set of locks, one for each record in a request's record set,
+        is atomically acquired, then atomically released after all the
+        records have been mapped and reduced.
+
+    maprelease
+       A single record lock is acquired and then released after the
+       record has been mapped and reduced. To prevent deadlocks, locks
+       are acquired based on a global record ordering.
+
+    ticket
+       Same as maprelease, except that instead of a global record
+       ordering, locks are acquired in the order that "tickets"
+       corresponding to lock request are submitted.

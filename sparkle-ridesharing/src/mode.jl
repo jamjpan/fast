@@ -1,0 +1,2 @@
+struct Mode{T}
+end

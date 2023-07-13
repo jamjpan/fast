@@ -1,0 +1,281 @@
+                SPARKLE-RIDESHARING
+                v0.1.0
+
+This software implements a ridesharing service via Sparkle.
+
+File Formats
+This software can read four types of files: edgelists, trip files,
+request files, and vehicle files.
+
+    Edgelists
+    A 6-column CSV with one header row in same format as found at:
+    http://csun.uic.edu/datasets.html#urban.road.networks
+    |-----+------------+------------------------------|
+    | Col | Name       | Desc                         |
+    |-----+------------+------------------------------|
+    |   1 | XCoord     | Source node UTM x coordinate |
+    |   2 | Ycoord     | Source node UTM y coordinate |
+    |   3 | START_NODE | Source node identifier       |
+    |   4 | END_NODE   | Target node identifier       |
+    |   5 | EDGE       | Edge identifier (unused)     |
+    |   6 | LENGTH     | Edge length (meters)         |
+    |-----+------------+------------------------------|
+
+    Trip Files
+    A 6-column CSV file with one header row, used as input to
+    tripstoreqs.
+    |-----+------------+----------------------------|
+    | Col | Name       | Desc                       |
+    |-----+------------+----------------------------|
+    |   1 | START_TIME | Trip start time            |
+    |   2 | START_LON  | Departure UTM x coordinate |
+    |   3 | START_LAT  | Departure UTM y coordinate |
+    |   4 | END_TIME   | Trip end time (unused)     |
+    |   5 | END_LON    | Arrival UTM x coordinate   |
+    |   6 | END_LAT    | Arrival UTM y coordinate   |
+    |-----+------------+----------------------------|
+      - The file should be sorted by Column 1
+      - Columns 1 and 4 should be in HH:MM:SS format
+
+    Request Files
+    A 5-column CSV with one header row in same format as produced by
+    tripstoreqs.
+    |-----+-------------+-----------------------------------|
+    | Col | Name        | Desc                              |
+    |-----+-------------+-----------------------------------|
+    |   1 | RID         | Request identifier (1, 2, ..., n) |
+    |   2 | T-#         | Early time                        |
+    |   3 | ORIGIN      | Origin node                       |
+    |   4 | DESTINATION | Destination node                  |
+    |   5 | TRIP_LENGTH | Shortest-path dist (meters)       |
+    |-----+-------------+-----------------------------------|
+      - Column 1 should provide the sort order for the file
+      - The sort order should also apply to Column 2
+      - Column 2 should be seconds relative to some starting time
+
+    Vehicle Files
+    A 3-column CSV with one header row in same format as produced by
+    randvehs.
+    |-----+------+-----------------------------------|
+    | Col | Name | Desc                              |
+    |-----+------+-----------------------------------|
+    |   1 | SID  | Vehicle identifier (1, 2, ..., m) |
+    |   2 | T-#  | Starting time                     |
+    |   3 | NODE | Starting node                     |
+    |-----+------+-----------------------------------|
+      - Column 1 should provide the sort order for the file,
+      - The sort order should also apply to Column 2
+      - Column 2 should be seconds relative to some starting time
+
+Data Structures
+This software introduces several "types". But physically, they are all
+native Julia types. Here is a description of these "types" and their
+physical values.
+
+    Edges, Dict{Integer, Vector{Tuple{Integer, Number}}}
+        Maps nodes to their weighted neighbors.
+
+    Node, NTuple{2, Number}
+        Describes a point on the road network.
+
+    Nodes, n x 2 Matrix{Number}
+        Stores all nodes, row-indexed by node identifier.
+            The nodes matrix stores nodes contiguously in consecutive
+        order by identifier. Due to this design, identifiers must be
+        integer. and if a node, i, is not found in the edgelist, it
+        will be listed as coordinate (0,0) (see loadgraph.jl).
+
+    Request, NTuple(5, Integer)
+        Describes the properties of a ridesharing request.
+        |-------+-------------------------------------------------|
+        | Elem. | Desc                                            |
+        |-------+-------------------------------------------------|
+        |     1 | Earliest departure time (sec from start)        |
+        |     2 | Latest acceptable arrival time (sec from start) |
+        |     3 | Origin node identifier                          |
+        |     4 | Destination node identifier                     |
+        |     5 | Trip length (meters)                            |
+        |-------+-------------------------------------------------|
+
+    Requests, n x 5 Matrix{Integer}
+        Stores all requests, row-indexed by request identifier.
+
+    Schedule, Tuple{Vararg{"Waypoint"}}
+        Lists pick-up and drop-off waypoints for a vehicle.
+
+    Vehicles, m x 4 Matrix{Any}
+        Stores all vehicle records, row-indexed by vehicle identifier.
+        |-----+------------------------------------|
+        | Col | Desc                               |
+        |-----+------------------------------------|
+        |   1 | Location, Integer; node identifier |
+        |   2 | Location, Number; x-coordinate     |
+        |   3 | Location, Number; y-coordinate     |
+        |   4 | Schedule, Vector{Waypoint}         |
+        |-----+------------------------------------|
+
+    Waypoint, Tuple{Integer, Integer, Integer, Bool}
+        Describes a pick-up (flag=true) or drop-off (flag=false).
+        The "Waypoint" type-alias can be used for brevity.
+        |-------+-------------------------------------------------|
+        | Elem. | Desc                                            |
+        |-------+-------------------------------------------------|
+        |     1 | Time (sec from start)                           |
+        |     2 | Node identifier                                 |
+        |     3 | Request identifier                              |
+        |     4 | Flag (true for "pick-up", false for "drop-off") |
+        |-------+-------------------------------------------------|
+
+Performance
+
+    Requests: 10 (Chengdu) OLD!!!
+    Units in seconds
+    |--------------+--------+--------+--------+--------|
+    | outer/inner  |      λ |     λ* |      π |     π* |
+    |--------------+--------+--------+--------+--------|
+    | λ-broad      | 49.231 |      - | 38.448 |      - |
+    | λ-pipel      | 49.683 | 21.182 | 16.674 | 18.323 |
+    |--------------+--------+--------+--------+--------|
+    | π-broad      | 54.387 |      - | 40.336 |      - |
+    | π-pipel-excl | 54.115 | 24.677 | 18.500 | 19.497 |
+    | π-pipel-mapr | 47.545 | 20.363 | 40.338 | 22.441 |
+    | π-pipel-tick | 60.186 | 22.987 | 14.450 | 17.044 |
+    |--------------+--------+--------+--------+--------|
+
+    Requests: 100 (Chengdu)
+    Units in seconds
+    |--------------+--------+----+--------+----|
+    | outer/inner  |      λ | λ* |      π | π* |
+    |--------------+--------+----+--------+----|
+    | λ-broad      | 60.896 | -  | 34.418 | -  |
+    | λ-pipel      |        |    |        |    |
+    |--------------+--------+----+--------+----|
+    | π-broad      | 52.957 | -  | 34.698 | -  |
+    | π-pipel-excl |        |    |        |    |
+    | π-pipel-mapr |        |    |        |    |
+    | π-pipel-tick |        |    |        |    |
+    |--------------+--------+----+--------+----|
+
+    Performance-critical functions. See benchmark/*.jl for commands.
+    Big STD due to garbage collect
+    |----------------------------------+----------------+-----------|
+    | Function                         | Mean Time (ns) |  STD (ns) |
+    |----------------------------------+----------------+-----------|
+    | bubbles                          |                |           |
+    | --- l=0                          |             85 |        75 |
+    | --- l=2                          |        5858000 |    358822 |
+    | --- l=4                          |       27578000 |    347057 |
+    | --- l=8                          |       92048000 |    793037 |
+    | --- l=16                         |      173149000 |   1995000 |
+    | --- l=32                         |      292722000 |   2082000 |
+    | --- l=32, gcache                 |          32532 |      2792 |
+    | bubbleprune                      |                |           |
+    | ---- l=4                         |           1711 |      3422 |
+    | captab                           |                |           |
+    | --- l=0                          |            541 |       789 |
+    | --- l=2                          |           1161 |      3347 |
+    | --- l=4                          |           2536 |      7128 |
+    | --- l=8                          |           7629 |     20028 |
+    | --- l=16                         |          21385 |     57212 |
+    | --- l=32                         |          97644 |    101221 |
+    | dijkstra                         |                |           |
+    | ---- 1 sp                        |       11115000 |   4459000 |
+    | ---- 100 sp                      |     1086000000 | 221108000 |
+    | ---- 100-target ss               |       33482000 |   1744000 |
+    | findinsertion                    |                |           |
+    | ---- dp sp, l=0                  |       22556000 |   6508000 |
+    | ---- dp sp, l=2                  |      275164000 |  51911000 |
+    | ---- dp sp, l=4                  |      827583000 |  82275000 |
+    | ---- dp sp, l=8                  |     1385000000 |  91277000 |
+    | ---- dp sp, l=16                 |     3253000000 | 321040000 |
+    | ---- dp sp, l=32, lru=  0% noadd |     6986000000 |         - |
+    | ---- dp sp, l=32, lru= 25% noadd |     6388000000 |         - |
+    | ---- dp sp, l=32, lru= 50% noadd |     5329000000 | 783529000 |
+    | ---- dp sp, l=32, lru= 75% noadd |     5202000000 |         - |
+    | ---- dp sp, l=32, lru=100% noadd |     3873000000 | 690409000 |
+    | ---- dp sp, l=32, lru=  0%   add |     1334000000 | 127115000 |
+    | ---- dp sp, l=32, lru= 25%   add |     1599000000 | 105942000 |
+    | ---- dp sp, l=32, lru= 50%   add |     1541000000 |  83981000 |
+    | ---- dp sp, l=32, lru= 75%   add |     1515000000 | 120369000 |
+    | ---- dp sp, l=32, lru=100%   add |     1515000000 | 108825000 |
+    | ---- dp sp, l=32, gcache         |      459448000 | 265801000 |
+    | ---- dp l2, l=0                  |           1380 |      4280 |
+    | ---- dp l2, l=2                  |           7817 |     15204 |
+    | ---- dp l2, l=4                  |          20393 |     49349 |
+    | ---- dp l2, l=8                  |          55610 |     97597 |
+    | ---- dp l2, l=16                 |         188207 |    247574 |
+    | ---- dp l2, l=32                 |         597591 |    341532 |
+    | ---- nv sp, l=0                  |       22559000 |   6308000 |
+    | ---- nv sp, l=2                  |      224096000 |  38844000 |
+    | ---- nv sp, l=4                  |      758741000 |  71589000 |
+    | ---- nv sp, l=8                  |     2676000000 | 251971000 |
+    | ---- nv sp, l=16                 |     9709000000 |         - |
+    | ---- nv sp, l=32                 |    38927000000 |         - |
+    | ---- nv l2, l=0                  |           1377 |      4197 |
+    | ---- nv l2, l=2                  |           6417 |     12237 |
+    | ---- nv l2, l=4                  |          22196 |     44974 |
+    | ---- nv l2, l=8                  |          91664 |    123946 |
+    | ---- nv l2, l=16                 |         524939 |    402238 |
+    | ---- nv l2, l=32                 |        3121000 |    844605 |
+    | insert                           |                |           |
+    | ---- sp, l=0                     |       23971000 |   6808000 |
+    | ---- sp, l=2                     |       42272000 |  18190000 |
+    | ---- sp, l=4                     |       46750000 |  16280000 |
+    | ---- sp, l=8                     |       50810000 |  16345000 |
+    | ---- sp, l=16                    |       64999000 |  17581000 |
+    | ---- sp, l=32, lru=  0% noadd    |       66496000 |  17009000 |
+    | ---- sp, l=32, lru= 25% noadd    |       63197000 |  15970000 |
+    | ---- sp, l=32, lru= 50% noadd    |       53001000 |  14940000 |
+    | ---- sp, l=32, lru= 75% noadd    |       49170000 |  13916000 |
+    | ---- sp, l=32, lru=100% noadd    |       43924000 |  10311000 |
+    | ---- l2, l=0                     |            930 |      1357 |
+    | ---- l2, l=2                     |           1360 |      1044 |
+    | ---- l2, l=4                     |           1109 |       984 |
+    | ---- l2, l=8                     |           1614 |      1307 |
+    | ---- l2, l=16                    |           2788 |      3054 |
+    | ---- l2, l=32                    |           4194 |      4416 |
+    | isfulfillable                    |            602 |        53 |
+    | isseatable                       |                |           |
+    | ---- none                        |            149 |         6 |
+    | ---- one                         |            148 |        11 |
+    | ---- two                         |            229 |        19 |
+    | l2norm                           |             11 |         1 |
+    | neighbors                        |        1753000 |    483365 |
+    | popcached                        |             66 |        45 |
+    | selectrequests                   |           3968 |      6542 |
+    |----------------------------------+----------------+-----------|
+
+    Cap-Tab vs Isseatable
+    Time to find all feasible (i,j) pairs
+    Captab has expensive build phase. In practice, build occurs when a
+    vehicle record is updated. If updates are not frequent compared to
+    reads, and schedules are long, then captab is faster overall.
+    
+        captab                 : isseatable
+        (c_build + n*c_lookup) : n*c_scan
+
+    |-----------------------+----------------+----------|
+    | Routine               | Mean Time (ns) | STD (ns) |
+    |-----------------------+----------------+----------|
+    | captab (build+lookup) |                |          |
+    | ---- l=0              |           1026 |     1867 |
+    | ---- l=2              |           1834 |     6301 |
+    | ---- l=4              |           3413 |     8467 |
+    | ---- l=8              |           9945 |    29067 |
+    | ---- l=16             |          27161 |    60697 |
+    | ---- l=32             |         115018 |   110736 |
+    | captab (lookup)       |                |          |
+    | ---- l=0              |            213 |      245 |
+    | ---- l=2              |            326 |      269 |
+    | ---- l=4              |            570 |      421 |
+    | ---- l=8              |           1977 |     6991 |
+    | ---- l=16             |           5173 |    11023 |
+    | ---- l=32             |          15521 |     2795 |
+    | isseatable            |                |          |
+    | ---- l=0              |            185 |      223 |
+    | ---- l=2              |            265 |      242 |
+    | ---- l=4              |            507 |      372 |
+    | ---- l=8              |           2093 |     5639 |
+    | ---- l=16             |           7790 |    11688 |
+    | ---- l=32             |          42362 |    18029 |
+    |-----------------------+----------------+----------|
